@@ -1,0 +1,55 @@
+# ── Claude Code 관련 ─────────────────────────────────────
+CLAUDE.md
+
+# ── Markdown (README.md 제외) ────────────────────────────
+*.md
+!README.md
+
+# ── 환경변수 / API 키 ─────────────────────────────────────
+.env
+.env.local
+.env.production
+.env.development
+ai-server/.env
+
+# ── Spring Boot 설정 (JWT/암호화 키 하드코딩) ─────────────
+backend/src/main/resources/application.yml
+backend/src/main/resources/application-*.yml
+backend/src/test/resources/application*.yml
+
+# ── IDE / 에디터 ─────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+*.suo
+*.user
+
+# ── Frontend ─────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ── Backend 빌드 산출물 ───────────────────────────────────
+backend/build/
+backend/.gradle/
+backend/out/
+
+# ── IntelliJ Plugin 빌드 산출물 ──────────────────────────
+intellij-plugin/build/
+intellij-plugin/.gradle/
+intellij-plugin/.intellijPlatform/
+
+# ── Python AI Server ─────────────────────────────────────
+ai-server/venv/
+ai-server/__pycache__/
+ai-server/**/__pycache__/
+ai-server/**/*.pyc
+ai-server/.pytest_cache/
+
+# ── 로그 ─────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

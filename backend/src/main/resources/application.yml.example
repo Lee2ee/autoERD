@@ -1,0 +1,37 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/autoerd}
+    username: ${SPRING_DATASOURCE_USERNAME:autoerd}
+    password: ${SPRING_DATASOURCE_PASSWORD:your_db_password_here}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  data:
+    redis:
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
+
+server:
+  port: 8002
+
+ai:
+  server:
+    url: ${AI_SERVER_URL:http://localhost:8000}
+
+jwt:
+  secret: ${JWT_SECRET:your_jwt_secret_key_here_must_be_at_least_256_bits}
+  expiration-ms: 86400000  # 24h
+
+encryption:
+  key: ${ENCRYPTION_KEY:your_32_char_encryption_key_here}  # 반드시 32자
+
+logging:
+  level:
+    com.autoerd: DEBUG

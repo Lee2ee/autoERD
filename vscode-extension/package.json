@@ -1,0 +1,49 @@
+{
+  "name": "autoerd",
+  "displayName": "AutoERD",
+  "description": "AI 기반 DB 모델링 및 ERD 자동 생성",
+  "version": "1.0.0",
+  "publisher": "autoerd",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "autoerd.open",
+        "title": "AutoERD: 열기",
+        "icon": "$(database)"
+      }
+    ],
+    "configuration": {
+      "title": "AutoERD",
+      "properties": {
+        "autoerd.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:3000",
+          "description": "AutoERD 프론트엔드 서버 URL"
+        }
+      }
+    },
+    "menus": {
+      "editor/title": [
+        {
+          "command": "autoerd.open",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npm run compile && vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.24.0"
+  }
+}

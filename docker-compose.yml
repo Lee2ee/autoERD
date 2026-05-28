@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: autoerd-postgres
+    environment:
+      POSTGRES_DB: autoerd
+      POSTGRES_USER: autoerd
+      POSTGRES_PASSWORD: autoerd1234
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autoerd"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: autoerd-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: autoerd-backend
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/autoerd
+      SPRING_DATASOURCE_USERNAME: autoerd
+      SPRING_DATASOURCE_PASSWORD: autoerd1234
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      AI_SERVER_URL: http://ai-server:8000
+      JWT_SECRET: ${JWT_SECRET:-autoerd-jwt-secret-key-must-be-at-least-256-bits-long!!}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-AutoErdEncryptKey32Chars!!@@##$$}
+    ports:
+      - "${BACKEND_PORT:-8002}:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ai-server:
+    build:
+      context: ./ai-server
+      dockerfile: Dockerfile
+    container_name: autoerd-ai-server
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: llama-3.3-70b-versatile
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "${AI_PORT:-8000}:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: autoerd-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
