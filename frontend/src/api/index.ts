@@ -1,10 +1,10 @@
 import axios from 'axios'
-import { Project, AnalysisResult } from '../types'
+import { Project, AnalysisResult, NormalFormLevel, NormalizeResult } from '../types'
 import { useAuthStore } from '../stores/authStore'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 30000,
+  timeout: 120000,
 })
 
 // JWT 자동 첨부
@@ -51,6 +51,12 @@ export const getMe = (): Promise<AuthResponse> =>
 
 export const analyzeRequirement = (text: string): Promise<AnalysisResult> =>
   api.post('/ai/analyze', { text }).then((r) => r.data)
+
+export const normalizeEntities = (
+  entities: Array<{ name: string; attributes: string[] }>,
+  level: NormalFormLevel,
+): Promise<NormalizeResult> =>
+  api.post('/ai/normalize', { entities, level }).then((r) => r.data)
 
 export const saveProject = (project: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>): Promise<Project> =>
   api.post('/projects', project).then((r) => r.data)

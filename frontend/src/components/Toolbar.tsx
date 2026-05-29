@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useEntityStore } from '../stores/entityStore'
 import { useProjectStore } from '../stores/projectStore'
+import { useRequirementStore } from '../stores/requirementStore'
 import { useAuthStore } from '../stores/authStore'
 import { saveProject, updateProject } from '../api'
 import InviteMemberModal from './InviteMemberModal'
@@ -10,8 +11,9 @@ import InviteMemberModal from './InviteMemberModal'
 export default function Toolbar() {
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { entities, relationships, setEntities, setRelationships } = useEntityStore()
+  const { entities, relationships, businessRules, setEntities, setRelationships, setBusinessRules, reset } = useEntityStore()
   const { id: storedId, name, myRole, setProject, setName, setSavedAt } = useProjectStore()
+  const { text: requirementText, setText } = useRequirementStore()
   const { user, logout } = useAuthStore()
   const [showInvite, setShowInvite] = useState(false)
 
@@ -22,11 +24,11 @@ export default function Toolbar() {
     try {
       const pid = projectId || storedId
       if (pid) {
-        const updated = await updateProject(pid, { entities, relationships })
+        const updated = await updateProject(pid, { entities, relationships, businessRules, requirement: requirementText })
         setSavedAt(updated.updatedAt)
         toast.success('저장 완료')
       } else {
-        const created = await saveProject({ name, entities, relationships })
+        const created = await saveProject({ name, entities, relationships, businessRules, requirement: requirementText })
         setProject(created.id, created.name)
         setSavedAt(created.createdAt)
         toast.success('프로젝트 저장됨')
@@ -34,10 +36,10 @@ export default function Toolbar() {
     } catch {
       toast.error('저장 실패')
     }
-  }, [projectId, storedId, name, entities, relationships, canEdit])
+  }, [projectId, storedId, name, entities, relationships, businessRules, requirementText, canEdit])
 
   const handleExport = useCallback(() => {
-    const data = { name, entities, relationships, exportedAt: new Date().toISOString() }
+    const data = { name, requirementText, entities, relationships, businessRules, exportedAt: new Date().toISOString() }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -46,7 +48,15 @@ export default function Toolbar() {
     a.click()
     URL.revokeObjectURL(url)
     toast.success('JSON 내보내기 완료')
-  }, [name, entities, relationships])
+  }, [name, requirementText, entities, relationships, businessRules])
+
+  const handleReset = useCallback(() => {
+    if (entities.length === 0 && !requirementText.trim()) { toast.error('초기화할 내용이 없습니다.'); return }
+    if (!window.confirm(`엔티티 ${entities.length}개, 관계, 업무 규칙 및 요구사항이 모두 삭제됩니다.\n계속하시겠습니까?`)) return
+    reset()
+    setText('')
+    toast.success('프로젝트가 초기화되었습니다.')
+  }, [entities.length, requirementText, reset, setText])
 
   const handleImport = useCallback(() => {
     if (!canEdit) { toast.error('편집 권한이 없습니다.'); return }
@@ -62,7 +72,9 @@ export default function Toolbar() {
           const data = JSON.parse(ev.target?.result as string)
           setEntities(data.entities ?? [])
           setRelationships(data.relationships ?? [])
+          setBusinessRules(data.businessRules ?? [])
           if (data.name) setName(data.name)
+          if (data.requirementText !== undefined) setText(data.requirementText)
           toast.success('가져오기 완료')
         } catch {
           toast.error('JSON 파일 형식이 올바르지 않습니다.')
@@ -109,6 +121,14 @@ export default function Toolbar() {
               onClick={() => setShowInvite(true)}
             >
               멤버 초대
+            </button>
+          )}
+          {canEdit && (
+            <button
+              className="text-sm text-red-500 border border-red-200 px-3 py-1 rounded hover:bg-red-50 hover:border-red-400 transition-colors"
+              onClick={handleReset}
+            >
+              초기화
             </button>
           )}
           <button

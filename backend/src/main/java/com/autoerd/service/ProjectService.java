@@ -7,13 +7,17 @@ import com.autoerd.domain.project.*;
 import com.autoerd.domain.relationship.RelationshipModel;
 import com.autoerd.domain.user.User;
 import com.autoerd.domain.user.UserRepository;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.NoSuchElementException;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -22,6 +26,7 @@ public class ProjectService {
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository memberRepository;
     private final UserRepository userRepository;
+    private final ObjectMapper objectMapper;
 
     /** 사용자가 멤버인 프로젝트 목록 */
     public List<ProjectDto> listProjects(Long userId) {
@@ -43,6 +48,7 @@ public class ProjectService {
         project.setName(dto.getName());
         project.setDescription(dto.getDescription());
         project.setRequirement(dto.getRequirement());
+        project.setBusinessRulesJson(toJson(dto.getBusinessRules()));
         applyEntities(project, dto);
         applyRelationships(project, dto);
         projectRepository.save(project);
@@ -65,6 +71,7 @@ public class ProjectService {
         if (dto.getName() != null) project.setName(dto.getName());
         if (dto.getDescription() != null) project.setDescription(dto.getDescription());
         if (dto.getRequirement() != null) project.setRequirement(dto.getRequirement());
+        if (dto.getBusinessRules() != null) project.setBusinessRulesJson(toJson(dto.getBusinessRules()));
         if (dto.getEntities() != null) {
             project.getEntities().clear();
             applyEntities(project, dto);
@@ -239,9 +246,30 @@ public class ProjectService {
     private ProjectDto toDto(Project p, Long userId) {
         ProjectDto dto = toDtoSummary(p, userId);
         dto.setRequirement(p.getRequirement());
+        dto.setBusinessRules(fromJson(p.getBusinessRulesJson()));
         dto.setEntities(p.getEntities().stream().map(this::toEntityDto).toList());
         dto.setRelationships(p.getRelationships().stream().map(this::toRelDto).toList());
         return dto;
+    }
+
+    private String toJson(List<Object> list) {
+        if (list == null) return null;
+        try {
+            return objectMapper.writeValueAsString(list);
+        } catch (Exception e) {
+            log.error("businessRules JSON 직렬화 실패: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private List<Object> fromJson(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<Object>>() {});
+        } catch (Exception e) {
+            log.error("businessRules JSON 역직렬화 실패: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     private EntityDto toEntityDto(EntityModel em) {

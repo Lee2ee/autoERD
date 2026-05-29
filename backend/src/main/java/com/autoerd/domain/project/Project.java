@@ -32,6 +32,9 @@ public class Project {
     @Column(columnDefinition = "TEXT")
     private String requirement;
 
+    @Column(columnDefinition = "TEXT")
+    private String businessRulesJson;
+
     @OneToMany(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<EntityModel> entities = new ArrayList<>();
 

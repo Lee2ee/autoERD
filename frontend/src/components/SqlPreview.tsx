@@ -5,9 +5,12 @@ import { useEntityStore } from '../stores/entityStore'
 import { generateDDL } from '../utils/ddlGenerator'
 
 export default function SqlPreview() {
-  const { entities, relationships } = useEntityStore()
+  const { entities, relationships, businessRules } = useEntityStore()
 
-  const sql = useMemo(() => generateDDL(entities, relationships), [entities, relationships])
+  const sql = useMemo(
+    () => generateDDL(entities, relationships, businessRules),
+    [entities, relationships, businessRules]
+  )
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(sql).then(() => toast.success('SQL 복사됨'))

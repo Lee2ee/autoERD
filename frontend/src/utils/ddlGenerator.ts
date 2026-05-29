@@ -1,4 +1,4 @@
-import { Entity, Relationship, Attribute } from '../types'
+import { Entity, Relationship, Attribute, BusinessRule } from '../types'
 
 function columnTypeToDDL(attr: Attribute): string {
   switch (attr.type) {
@@ -29,8 +29,18 @@ function columnTypeToDDL(attr: Attribute): string {
   }
 }
 
-export function generateDDL(entities: Entity[], relationships: Relationship[]): string {
+export function generateDDL(
+  entities: Entity[],
+  relationships: Relationship[],
+  businessRules: BusinessRule[] = [],
+): string {
   if (entities.length === 0) return ''
+
+  const enabled = businessRules.filter((r) => r.enabled)
+
+  // 엔티티명 → tableName 매핑 헬퍼
+  const tableOf = (entityName: string) =>
+    entities.find((e) => e.name === entityName)?.tableName ?? entityName.toLowerCase()
 
   const lines: string[] = []
   lines.push('-- Auto-generated PostgreSQL DDL')
@@ -61,7 +71,7 @@ export function generateDDL(entities: Entity[], relationships: Relationship[]): 
     lines.push('')
   }
 
-  // FK 제약조건
+  // FK 제약조건 (CASCADE 정책 반영)
   const fkLines: string[] = []
   for (const entity of entities) {
     for (const attr of entity.attributes) {
@@ -70,9 +80,17 @@ export function generateDDL(entities: Entity[], relationships: Relationship[]): 
         if (refEntity) {
           const refPk = refEntity.attributes.find((a) => a.isPrimary)
           if (refPk) {
+            // CASCADE 업무 규칙 매칭: entity + column
+            const cascadeRule = enabled.find(
+              (r) =>
+                r.ruleType === 'CASCADE' &&
+                (r.entity === entity.name || tableOf(r.entity) === entity.tableName) &&
+                (!r.column || r.column === attr.name || r.column === attr.columnName)
+            )
+            const onDelete = cascadeRule?.definition ?? 'NO ACTION'
             fkLines.push(
               `ALTER TABLE ${entity.tableName} ADD CONSTRAINT fk_${entity.tableName}_${attr.columnName} ` +
-              `FOREIGN KEY (${attr.columnName}) REFERENCES ${refEntity.tableName}(${refPk.columnName});`
+              `FOREIGN KEY (${attr.columnName}) REFERENCES ${refEntity.tableName}(${refPk.columnName}) ON DELETE ${onDelete};`
             )
           }
         }
@@ -106,6 +124,65 @@ export function generateDDL(entities: Entity[], relationships: Relationship[]): 
   if (fkLines.length > 0) {
     lines.push('-- Foreign Key Constraints')
     lines.push(...fkLines)
+    lines.push('')
+  }
+
+  // ── 업무 규칙 기반 제약조건 ─────────────────────────────────
+
+  const checkLines: string[] = []
+  const uniqueLines: string[] = []
+  const indexLines: string[] = []
+
+  for (const rule of enabled) {
+    const tableName = tableOf(rule.entity)
+    const colName = rule.column ? rule.column.toLowerCase().replace(/\s+/g, '_') : null
+
+    if (rule.ruleType === 'CHECK' && colName) {
+      checkLines.push(
+        `ALTER TABLE ${tableName} ADD CONSTRAINT chk_${tableName}_${colName} CHECK (${rule.definition});`
+      )
+    }
+
+    if (rule.ruleType === 'ENUM' && colName) {
+      const values = rule.definition
+        .split(',')
+        .map((v) => `'${v.trim()}'`)
+        .join(', ')
+      checkLines.push(
+        `ALTER TABLE ${tableName} ADD CONSTRAINT chk_${tableName}_${colName}_enum CHECK (${colName} IN (${values}));`
+      )
+    }
+
+    if (rule.ruleType === 'UNIQUE' && colName) {
+      // 컬럼 레벨 UNIQUE는 이미 CREATE TABLE에 반영됐을 수 있으므로, 추가 보험용
+      uniqueLines.push(
+        `ALTER TABLE ${tableName} ADD CONSTRAINT uq_${tableName}_${colName} UNIQUE (${colName});`
+      )
+    }
+
+    if (rule.ruleType === 'INDEX' && colName) {
+      indexLines.push(
+        `CREATE INDEX IF NOT EXISTS idx_${tableName}_${colName} ON ${tableName}(${colName});`
+      )
+    }
+  }
+
+  if (checkLines.length > 0) {
+    lines.push('-- CHECK / ENUM Constraints')
+    lines.push(...checkLines)
+    lines.push('')
+  }
+
+  if (uniqueLines.length > 0) {
+    lines.push('-- Unique Constraints')
+    lines.push(...uniqueLines)
+    lines.push('')
+  }
+
+  if (indexLines.length > 0) {
+    lines.push('-- Indexes')
+    lines.push(...indexLines)
+    lines.push('')
   }
 
   return lines.join('\n')

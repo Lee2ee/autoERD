@@ -10,6 +10,7 @@ public class ProjectDto {
     private String name;
     private String description;
     private String requirement;
+    private List<Object> businessRules;
     private List<EntityDto> entities;
     private List<RelationshipDto> relationships;
     private LocalDateTime createdAt;

@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast'
 import { useAuthStore } from './stores/authStore'
 import { useProjectStore } from './stores/projectStore'
 import { useEntityStore } from './stores/entityStore'
+import { useRequirementStore } from './stores/requirementStore'
 import { getProject } from './api'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
@@ -13,18 +14,24 @@ import Toolbar from './components/Toolbar'
 import RequirementInput from './components/RequirementInput'
 import EntityTable from './components/EntityTable'
 import RelationshipPanel from './components/RelationshipPanel'
+import BusinessRulePanel from './components/BusinessRulePanel'
+import NormalizationPanel from './components/NormalizationPanel'
 import ERDCanvas from './components/ERDCanvas'
 import SqlPreview from './components/SqlPreview'
 
 type Tab = 'entities' | 'erd' | 'sql'
+type SideTab = 'requirement' | 'normalize' | 'relationship' | 'rules'
 
 // ERD 편집기 (프로젝트 로드 포함)
 function EditorPage() {
   const { id } = useParams<{ id: string }>()
   const [tab, setTab] = useState<Tab>('entities')
+  const [sideTab, setSideTab] = useState<SideTab>('requirement')
   const [loading, setLoading] = useState(!!id)
+  const { relationships, businessRules } = useEntityStore()
   const { setProject } = useProjectStore()
-  const { setEntities, setRelationships } = useEntityStore()
+  const { setEntities, setRelationships, setBusinessRules } = useEntityStore()
+  const { setText } = useRequirementStore()
 
   useEffect(() => {
     if (!id) return
@@ -34,6 +41,8 @@ function EditorPage() {
         setProject(p.id, p.name, (p as { myRole?: string }).myRole)
         setEntities(p.entities ?? [])
         setRelationships(p.relationships ?? [])
+        setBusinessRules(p.businessRules ?? [])
+        setText(p.requirement ?? '')
       })
       .catch(console.error)
       .finally(() => setLoading(false))
@@ -51,9 +60,45 @@ function EditorPage() {
     <div className="h-screen flex flex-col bg-gray-100 overflow-hidden">
       <Toolbar />
       <div className="flex-1 flex overflow-hidden p-3 gap-3">
-        <div className="w-80 flex-shrink-0 flex flex-col gap-3 overflow-y-auto">
-          <RequirementInput />
-          <RelationshipPanel />
+        {/* 사이드바 */}
+        <div className="w-80 flex-shrink-0 flex flex-col overflow-hidden">
+          {/* 탭 바 */}
+          <div className="flex bg-white rounded-lg shadow mb-2 p-1 gap-0.5 flex-shrink-0">
+            {(
+              [
+                { key: 'requirement', label: '요구사항' },
+                { key: 'normalize',   label: '정규화' },
+                { key: 'relationship', label: '관계', badge: relationships.length || undefined },
+                { key: 'rules',       label: '업무규칙', badge: businessRules.length || undefined },
+              ] as { key: SideTab; label: string; badge?: number }[]
+            ).map(({ key, label, badge }) => (
+              <button
+                key={key}
+                onClick={() => setSideTab(key)}
+                className={`flex-1 relative py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  sideTab === key
+                    ? 'bg-primary-600 text-white shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                {label}
+                {badge != null && (
+                  <span className={`absolute -top-1 -right-1 text-[10px] font-bold rounded-full px-1 leading-4 ${
+                    sideTab === key ? 'bg-white text-primary-600' : 'bg-primary-100 text-primary-600'
+                  }`}>
+                    {badge}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+          {/* 탭 콘텐츠 */}
+          <div className="flex-1 overflow-y-auto">
+            {sideTab === 'requirement'  && <RequirementInput />}
+            {sideTab === 'normalize'    && <NormalizationPanel />}
+            {sideTab === 'relationship' && <RelationshipPanel />}
+            {sideTab === 'rules'        && <BusinessRulePanel />}
+          </div>
         </div>
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex gap-1 mb-3">

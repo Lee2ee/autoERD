@@ -14,4 +14,38 @@ body {
 /* React Flow 커스텀 */
 .react-flow__node {
   font-size: 12px;
+  transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 엔티티 카드 등장 애니메이션 */
+@keyframes entity-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-entity-enter {
+  animation: entity-enter 0.28s ease-out both;
+}
+
+/* 정규화 중 카드 fade-out */
+@keyframes entity-exit {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.97) translateY(-6px);
+  }
+}
+
+.animate-entity-exit {
+  animation: entity-exit 0.2s ease-in both;
+  pointer-events: none;
 }

@@ -1,12 +1,13 @@
 import { create } from 'zustand'
 import { temporal } from 'zundo'
 import { v4 as uuidv4 } from 'uuid'
-import { Entity, Attribute, Relationship, DataType } from '../types'
+import { Entity, Attribute, Relationship, BusinessRule, DataType } from '../types'
 import { toSnakeCase } from '../utils/naming'
 
 interface EntityState {
   entities: Entity[]
   relationships: Relationship[]
+  businessRules: BusinessRule[]
 
   // Entity CRUD
   addEntity: (name: string, description?: string) => Entity
@@ -22,6 +23,12 @@ interface EntityState {
   addRelationship: (rel: Omit<Relationship, 'id'>) => void
   updateRelationship: (id: string, patch: Partial<Omit<Relationship, 'id'>>) => void
   removeRelationship: (id: string) => void
+
+  // Business Rule CRUD
+  setBusinessRules: (rules: BusinessRule[]) => void
+  addBusinessRules: (rules: BusinessRule[]) => void  // 기존 유지하며 추가 (중복 제거)
+  toggleBusinessRule: (id: string) => void
+  removeBusinessRule: (id: string) => void
 
   // Bulk
   setEntities: (entities: Entity[]) => void
@@ -45,6 +52,7 @@ export const useEntityStore = create<EntityState>()(
   temporal((set) => ({
     entities: [],
     relationships: [],
+    businessRules: [],
 
     addEntity: (name, description = '') => {
       const entity: Entity = {
@@ -93,11 +101,13 @@ export const useEntityStore = create<EntityState>()(
 
     addAttribute: (entityId, attr) => {
       set((s) => ({
-        entities: s.entities.map((e) =>
-          e.id === entityId
-            ? { ...e, attributes: [...e.attributes, defaultAttribute(attr)] }
-            : e
-        ),
+        entities: s.entities.map((e) => {
+          if (e.id !== entityId) return e
+          const newAttr = defaultAttribute(attr)
+          // 동일한 columnName이 이미 존재하면 추가하지 않음 (SQL 컬럼명은 테이블 내 유일해야 함)
+          if (e.attributes.some((a) => a.columnName === newAttr.columnName)) return e
+          return { ...e, attributes: [...e.attributes, newAttr] }
+        }),
       }))
     },
 
@@ -146,35 +156,47 @@ export const useEntityStore = create<EntityState>()(
           targetEntity &&
           (rel.type === 'MANY_TO_ONE' || rel.type === 'ONE_TO_ONE')
         ) {
-          const fkAttr = defaultAttribute({
-            name: `${targetEntity.name} ID`,
-            columnName: `${targetEntity.tableName}_id`,
-            type: 'BIGINT' as DataType,
-            isForeign: true,
-            isNullable: true,
-            referencedEntityId: rel.targetEntityId,
-          })
-          updatedEntities = entities.map((e) =>
-            e.id === rel.sourceEntityId
-              ? { ...e, attributes: [...e.attributes, fkAttr] }
-              : e
+          const fkCol = `${targetEntity.tableName}_id`
+          const alreadyHas = sourceEntity.attributes.some(
+            (a) => a.columnName === fkCol || a.referencedEntityId === rel.targetEntityId
           )
+          if (!alreadyHas) {
+            const fkAttr = defaultAttribute({
+              name: `${targetEntity.name} ID`,
+              columnName: fkCol,
+              type: 'BIGINT' as DataType,
+              isForeign: true,
+              isNullable: true,
+              referencedEntityId: rel.targetEntityId,
+            })
+            updatedEntities = entities.map((e) =>
+              e.id === rel.sourceEntityId
+                ? { ...e, attributes: [...e.attributes, fkAttr] }
+                : e
+            )
+          }
         }
 
         if (sourceEntity && targetEntity && rel.type === 'ONE_TO_MANY') {
-          const fkAttr = defaultAttribute({
-            name: `${sourceEntity.name} ID`,
-            columnName: `${sourceEntity.tableName}_id`,
-            type: 'BIGINT' as DataType,
-            isForeign: true,
-            isNullable: true,
-            referencedEntityId: rel.sourceEntityId,
-          })
-          updatedEntities = entities.map((e) =>
-            e.id === rel.targetEntityId
-              ? { ...e, attributes: [...e.attributes, fkAttr] }
-              : e
+          const fkCol = `${sourceEntity.tableName}_id`
+          const alreadyHas = targetEntity.attributes.some(
+            (a) => a.columnName === fkCol || a.referencedEntityId === rel.sourceEntityId
           )
+          if (!alreadyHas) {
+            const fkAttr = defaultAttribute({
+              name: `${sourceEntity.name} ID`,
+              columnName: fkCol,
+              type: 'BIGINT' as DataType,
+              isForeign: true,
+              isNullable: true,
+              referencedEntityId: rel.sourceEntityId,
+            })
+            updatedEntities = entities.map((e) =>
+              e.id === rel.targetEntityId
+                ? { ...e, attributes: [...e.attributes, fkAttr] }
+                : e
+            )
+          }
         }
 
         return {
@@ -198,8 +220,27 @@ export const useEntityStore = create<EntityState>()(
       }))
     },
 
+    setBusinessRules: (rules) => set({ businessRules: rules }),
+    addBusinessRules: (rules) =>
+      set((s) => {
+        const incoming = rules.filter(
+          (r) => !s.businessRules.some(
+            (x) => x.entity === r.entity && x.column === r.column && x.ruleType === r.ruleType
+          )
+        )
+        return { businessRules: [...s.businessRules, ...incoming] }
+      }),
+    toggleBusinessRule: (id) =>
+      set((s) => ({
+        businessRules: s.businessRules.map((r) =>
+          r.id === id ? { ...r, enabled: !r.enabled } : r
+        ),
+      })),
+    removeBusinessRule: (id) =>
+      set((s) => ({ businessRules: s.businessRules.filter((r) => r.id !== id) })),
+
     setEntities: (entities) => set({ entities }),
     setRelationships: (relationships) => set({ relationships }),
-    reset: () => set({ entities: [], relationships: [] }),
+    reset: () => set({ entities: [], relationships: [], businessRules: [] }),
   }))
 )

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from app.routers import analyze
+from app.routers import analyze, normalize
 
 load_dotenv()
 
@@ -40,6 +40,7 @@ app.add_middleware(
 )
 
 app.include_router(analyze.router)
+app.include_router(normalize.router)
 
 
 @app.get("/health")
