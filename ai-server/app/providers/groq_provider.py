@@ -2,6 +2,7 @@
 Groq API 기반 provider.
 규칙 기반 처리 후 AI 보조에만 사용.
 """
+import asyncio
 import json
 import logging
 from groq import AsyncGroq
@@ -19,6 +20,26 @@ def _safe_int(val: str | None) -> int | None:
         return None
 
 
+def _parse_json_array(raw: str) -> list:
+    """응답 문자열에서 JSON 배열을 파싱한다.
+    rfind("]") + 1 방식의 off-by-one 오류를 방지하고, 누락 시 빈 배열 반환.
+    """
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return []
+    return json.loads(raw[start:end + 1])
+
+
+def _parse_json_object(raw: str) -> dict:
+    """응답 문자열에서 JSON 객체를 파싱한다."""
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("No JSON object found")
+    return json.loads(raw[start:end + 1])
+
+
 import re
 _CJK_RE = re.compile(r'[\u2E80-\u2EFF\u2F00-\u2FDF\u3000-\u303F\u31C0-\u31EF'
                      r'\u3200-\u32FF\u3300-\u33FF\u3400-\u4DBF\u4E00-\u9FFF'
@@ -32,6 +53,10 @@ logger = logging.getLogger(__name__)
 
 
 AI_TEXT_LIMIT = 12000  # Groq 프롬프트에 전달할 최대 텍스트 길이
+
+# Groq API 동시 호출을 1개로 제한 (429 방지)
+# 프로세스 전체에서 공유되는 글로벌 세마포어
+_groq_semaphore = asyncio.Semaphore(1)
 
 
 class GroqProvider(BaseProvider):
@@ -49,15 +74,16 @@ class GroqProvider(BaseProvider):
         return self._rate_limit
 
     async def _chat(self, system: str, user: str, max_tokens: int = 2048) -> str:
-        raw = await self.client.chat.completions.with_raw_response.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.3,
-            max_tokens=max_tokens,
-        )
+        async with _groq_semaphore:
+            raw = await self.client.chat.completions.with_raw_response.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.3,
+                max_tokens=max_tokens,
+            )
         # rate limit 헤더 캡처
         h = raw.headers
         self._rate_limit = RateLimitInfo(
@@ -97,12 +123,9 @@ class GroqProvider(BaseProvider):
         try:
             # 엔티티 추출은 여러 엔티티 + 5~8개 속성 → 넉넉한 토큰 필요
             raw = await self._chat(system, user, max_tokens=3000)
-            # JSON 파싱
-            start = raw.find("[")
-            end = raw.rfind("]") + 1
-            if start == -1 or end == 0:
+            data = _parse_json_array(raw)
+            if not data:
                 raise ValueError(f"No JSON array found in response: {raw[:200]}")
-            data = json.loads(raw[start:end])
             return [
                 EntityCandidate(
                     name=_strip_cjk(item["name"]),
@@ -123,44 +146,46 @@ class GroqProvider(BaseProvider):
 
         try:
             raw = await self._chat(system, user, max_tokens=300)
-            start = raw.find("[")
-            end = raw.rfind("]") + 1
-            return json.loads(raw[start:end]) if start != -1 else []
+            return _parse_json_array(raw)
         except Exception as e:
             logger.warning(f"Groq attribute suggestion failed: {e}")
             return []
 
     async def infer_relationships(
-        self, entities: list[str], text: str
+        self, entities: list, text: str  # list[EntityCandidate] — 순환 import 방지로 타입 힌트 완화
     ) -> list[RelationshipCandidate]:
         if len(entities) < 2:
             return []
 
+        # 엔티티 이름 + 속성 목록을 함께 전달하여 FK 패턴도 AI가 직접 판단
+        entities_info = json.dumps(
+            [{"name": e.name, "attributes": e.attributes} for e in entities],
+            ensure_ascii=False,
+        )
+
         system = (
             "You are a database modeling expert. "
-            "Infer only the most direct and meaningful FK relationships between entities from Korean text. "
+            "Infer meaningful FK relationships between entities using two signals:\n"
+            "1. Korean requirements text — explicit or implicit relationships\n"
+            "2. Entity attributes — if an entity has an attribute like 'other_entity_id' "
+            "or 'otherEntity', it implies a FK relationship\n"
             "Rules:\n"
-            "- Only include relationships explicitly implied by the requirements\n"
-            "- Do NOT create relationships between every pair of entities\n"
-            "- Return at most 20 relationships\n"
+            "- Include ALL relationships supported by either signal\n"
+            "- Do NOT fabricate relationships with no evidence\n"
+            "- Return at most 30 relationships\n"
             "Return ONLY valid JSON array, no explanation."
         )
         user = (
-            f"Text:\n{self._trim(text)}\n\n"
-            f"Entities: {json.dumps(entities, ensure_ascii=False)}\n\n"
-            "Return JSON array (max 20, direct relationships only):\n"
+            f"Requirements text:\n{self._trim(text)}\n\n"
+            f"Entities with attributes:\n{entities_info}\n\n"
+            "Return JSON array:\n"
             '[{"source": "EntityA", "target": "EntityB", "type": "ONE_TO_MANY"}]\n'
             "Types: ONE_TO_ONE, ONE_TO_MANY, MANY_TO_ONE, MANY_TO_MANY"
         )
 
         try:
-            # 관계는 단순 JSON 배열 → 800 토큰이면 충분
-            raw = await self._chat(system, user, max_tokens=800)
-            start = raw.find("[")
-            end = raw.rfind("]") + 1
-            if start == -1:
-                return []
-            data = json.loads(raw[start:end])
+            raw = await self._chat(system, user, max_tokens=1000)
+            data = _parse_json_array(raw)
             return [RelationshipCandidate(**item) for item in data if "source" in item and "target" in item]
         except Exception as e:
             logger.error(f"Groq relationship inference failed: {type(e).__name__}: {e}")
@@ -264,11 +289,7 @@ class GroqProvider(BaseProvider):
         try:
             # 업무 규칙은 항목당 짧은 JSON → 1000 토큰이면 충분
             raw = await self._chat(system, user, max_tokens=1000)
-            start = raw.find("[")
-            end = raw.rfind("]") + 1
-            if start == -1 or end == 0:
-                return []
-            data = json.loads(raw[start:end])
+            data = _parse_json_array(raw)
             return [
                 BusinessRule(**item)
                 for item in data

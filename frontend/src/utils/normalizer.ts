@@ -146,6 +146,7 @@ function apply3NF(
 ): WorkingEntity[] {
   const extracted = new Map<string, Set<string>>() // prefix → attr names
   const modified: WorkingEntity[] = []
+  // 루프 중 생성되는 신규 엔티티도 추가해 중복 방지
   const existingNames = new Set(entities.map((e) => e.name))
 
   for (const entity of entities) {
@@ -176,6 +177,7 @@ function apply3NF(
       }
 
       if (!existingNames.has(prefix)) {
+        existingNames.add(prefix) // 동일 루프에서 중복 엔티티 생성 방지
         changes.push(
           `[${entity.name}] '${dependents.map((d) => d.name).join(', ')}' → ` +
             `'${prefix}' 엔티티로 분리 (${prefix}ID에 이행 종속, 3NF)`,

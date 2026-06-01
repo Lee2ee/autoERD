@@ -53,16 +53,17 @@ export function generateDDL(
     const columnLines: string[] = []
 
     for (const attr of entity.attributes) {
-      let col = `  ${attr.columnName} ${columnTypeToDDL(attr)}`
-
-      if (!attr.isNullable || attr.isPrimary) col += ' NOT NULL'
-      if (attr.isPrimary) col += ' PRIMARY KEY'
-      if (attr.isUnique && !attr.isPrimary) col += ' UNIQUE'
-      if (attr.defaultValue) col += ` DEFAULT ${attr.defaultValue}`
+      let col: string
+      // BIGINT/INTEGER PK → GENERATED ALWAYS AS IDENTITY (NOT NULL PRIMARY KEY 포함)
       if (attr.isPrimary && (attr.type === 'BIGINT' || attr.type === 'INTEGER')) {
         col = `  ${attr.columnName} ${columnTypeToDDL(attr)} GENERATED ALWAYS AS IDENTITY PRIMARY KEY`
+      } else {
+        col = `  ${attr.columnName} ${columnTypeToDDL(attr)}`
+        if (!attr.isNullable || attr.isPrimary) col += ' NOT NULL'
+        if (attr.isPrimary) col += ' PRIMARY KEY'
+        if (attr.isUnique && !attr.isPrimary) col += ' UNIQUE'
+        if (attr.defaultValue) col += ` DEFAULT ${attr.defaultValue}`
       }
-
       columnLines.push(col)
     }
 
@@ -73,6 +74,7 @@ export function generateDDL(
 
   // FK 제약조건 (CASCADE 정책 반영)
   const fkLines: string[] = []
+  const fkSeen = new Set<string>() // 중복 FK 제약조건 방지
   for (const entity of entities) {
     for (const attr of entity.attributes) {
       if (attr.isForeign && attr.referencedEntityId) {
@@ -80,16 +82,23 @@ export function generateDDL(
         if (refEntity) {
           const refPk = refEntity.attributes.find((a) => a.isPrimary)
           if (refPk) {
-            // CASCADE 업무 규칙 매칭: entity + column
+            const constraintName = `fk_${entity.tableName}_${attr.columnName}`
+            if (fkSeen.has(constraintName)) continue
+            fkSeen.add(constraintName)
+
+            // CASCADE 업무 규칙 매칭: entity + column (snake_case 정규화 후 비교)
+            const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, '_')
             const cascadeRule = enabled.find(
               (r) =>
                 r.ruleType === 'CASCADE' &&
                 (r.entity === entity.name || tableOf(r.entity) === entity.tableName) &&
-                (!r.column || r.column === attr.name || r.column === attr.columnName)
+                (!r.column ||
+                  normalize(r.column) === normalize(attr.name) ||
+                  normalize(r.column) === normalize(attr.columnName))
             )
             const onDelete = cascadeRule?.definition ?? 'NO ACTION'
             fkLines.push(
-              `ALTER TABLE ${entity.tableName} ADD CONSTRAINT fk_${entity.tableName}_${attr.columnName} ` +
+              `ALTER TABLE ${entity.tableName} ADD CONSTRAINT ${constraintName} ` +
               `FOREIGN KEY (${attr.columnName}) REFERENCES ${refEntity.tableName}(${refPk.columnName}) ON DELETE ${onDelete};`
             )
           }
@@ -146,7 +155,7 @@ export function generateDDL(
     if (rule.ruleType === 'ENUM' && colName) {
       const values = rule.definition
         .split(',')
-        .map((v) => `'${v.trim()}'`)
+        .map((v) => `'${v.trim().replace(/'/g, "''")}'`) // SQL 문자열 내 따옴표 escape
         .join(', ')
       checkLines.push(
         `ALTER TABLE ${tableName} ADD CONSTRAINT chk_${tableName}_${colName}_enum CHECK (${colName} IN (${values}));`

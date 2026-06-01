@@ -79,7 +79,7 @@ export default function BusinessRulePanel() {
             </p>
             <div className="space-y-1">
               {rules.map((rule) => {
-                const meta = RULE_META[rule.ruleType]
+                const meta = RULE_META[rule.ruleType] ?? { label: rule.ruleType, color: 'bg-gray-100 text-gray-600' }
                 return (
                   <div
                     key={rule.id}

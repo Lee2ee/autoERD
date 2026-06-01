@@ -7,10 +7,8 @@ import hashlib
 import logging
 import re
 from collections import OrderedDict
-from typing import Optional
 from app.models.schemas import AnalyzeResponse, EntityCandidate, RelationshipCandidate, BusinessRule
 from app.providers.base_provider import BaseProvider
-from app.services.relation_embedder import get_embedder
 
 KIWI_TEXT_LIMIT = 20000     # Kiwi 형태소 분석 최대 입력 길이 (OOM 방지)
 MAX_ENTITY_CANDIDATES = 30  # 엔티티 후보 최대 수 (관계 탐색 O(n²) 방지)
@@ -63,56 +61,6 @@ STOPWORDS = {
 # 명사 + 업무 분야 필터 (최소 2자 이상, 업무 명사만)
 MIN_NOUN_LEN = 2
 
-# 관계 패턴 (동사/조사 기반 추론)
-RELATION_PATTERNS = [
-    # (앞 엔티티 후치사, 뒤 엔티티 후치사, 관계타입)
-    (["은", "는", "이", "가"], ["여러", "다수의", "많은"], "ONE_TO_MANY"),
-    (["여러", "다수의", "많은"], [], "MANY_TO_ONE"),
-    (["은", "는"], ["하나의", "1개의"], "MANY_TO_ONE"),
-]
-
-# 관계 동사 원형 → 관계 타입
-# Kiwi가 활용형(가진/가지는/가집니다 등)을 모두 원형으로 정규화하므로 원형만 등록한다.
-# Kiwi 불가 환경에서는 이 키워드를 텍스트 포함 여부로 폴백 매칭한다.
-RELATION_VERBS = {
-    # ── ONE_TO_MANY ─────────────────────────────────────────
-    "가지다": "ONE_TO_MANY",   # 가진, 가지는, 가집니다
-    "갖다": "ONE_TO_MANY",    # 갖는, 갖고
-    "포함하다": "ONE_TO_MANY", # 포함한, 포함하는, 포함됩니다
-    "포함되다": "ONE_TO_MANY",
-    "등록하다": "ONE_TO_MANY", # 등록한, 등록하는
-    "작성하다": "ONE_TO_MANY", # 작성한, 작성하는
-    "게시하다": "ONE_TO_MANY",
-    "업로드하다": "ONE_TO_MANY",
-    "관리하다": "ONE_TO_MANY",
-    "보유하다": "ONE_TO_MANY",
-    "소유하다": "ONE_TO_MANY",
-    "생성하다": "ONE_TO_MANY",
-    "발급하다": "ONE_TO_MANY",
-    "발생하다": "ONE_TO_MANY",
-    "처리하다": "ONE_TO_MANY",
-    "담다": "ONE_TO_MANY",
-    # ── MANY_TO_ONE ─────────────────────────────────────────
-    "속하다": "MANY_TO_ONE",   # 속한, 속하는, 속합니다
-    "소속되다": "MANY_TO_ONE",
-    "귀속되다": "MANY_TO_ONE",
-    "참조하다": "MANY_TO_ONE",
-    "연결되다": "MANY_TO_ONE",
-    "종속되다": "MANY_TO_ONE",
-    # ── ONE_TO_ONE ───────────────────────────────────────────
-    "대응하다": "ONE_TO_ONE",
-    "매핑되다": "ONE_TO_ONE",
-    "연동되다": "ONE_TO_ONE",
-    # ── MANY_TO_MANY ─────────────────────────────────────────
-    "수강하다": "MANY_TO_MANY",
-    "구독하다": "MANY_TO_MANY",
-    "참여하다": "MANY_TO_MANY",
-    "좋아하다": "MANY_TO_MANY",
-    "태그하다": "MANY_TO_MANY",
-    "찜하다": "MANY_TO_MANY",
-    "공유하다": "MANY_TO_MANY",
-}
-
 # ── 업무 규칙 키워드 ─────────────────────────────────────────
 # AUDIT: 이력/타임스탬프 언급 시 모든 엔티티에 적용
 AUDIT_KEYWORDS = ["생성일", "수정일", "등록일", "변경일", "이력", "타임스탬프", "일시 기록"]
@@ -141,10 +89,9 @@ class NlpService:
             logger.debug(f"Cache hit for key {cache_key}")
             return self.cache[cache_key]
 
-        # 1차: 규칙 기반
+        # 1차: 규칙 기반 엔티티 후보 추출 (Kiwi 명사 분석)
         nouns = self._extract_nouns(text)
         entity_candidates = self._filter_entities(nouns, text)
-        rule_relationships = self._extract_relationships(text, entity_candidates)
 
         logger.debug(f"Rule-based candidates: {entity_candidates}")
 
@@ -162,13 +109,14 @@ class NlpService:
             )
             ai_entities = fallback_candidates
 
-        # 엔티티 이름 목록 기준으로 관계·업무규칙 추론 (AI가 정제한 목록 사용)
+        # 관계 추론: Groq가 텍스트 + 엔티티 속성(FK 패턴 포함) 기반으로 동적 판단
         ai_entity_names = [e.name for e in ai_entities]
-        ai_relationships = await self.provider.infer_relationships(ai_entity_names, text)
+        ai_relationships = await self.provider.infer_relationships(ai_entities, text)
         ai_rules = await self.provider.extract_business_rules(text, ai_entity_names)
 
-        # 관계 병합 (중복 제거)
-        merged_relationships = self._merge_relationships(rule_relationships, ai_relationships)
+        # FK 패턴 기반 보완 (Groq 실패 시 안전망 — 도메인 무관, 순수 패턴 매칭)
+        fk_relationships = self._infer_fk_relationships(ai_entities)
+        merged_relationships = self._merge_relationships(ai_relationships, fk_relationships)
 
         # 업무 규칙 병합
         merged_rules = self._merge_business_rules(rule_based_rules, ai_rules)
@@ -259,102 +207,48 @@ class NlpService:
         return (subjects + others)[:MAX_ENTITY_CANDIDATES]
 
     @staticmethod
-    def _split_sentences(text: str) -> list[str]:
-        """텍스트를 문장 단위로 분리한다."""
-        return [s.strip() for s in re.split(r'[.。!?\n]+', text) if s.strip()]
+    def _to_snake(name: str) -> str:
+        """엔티티 이름을 snake_case FK 패턴으로 변환. 예: OrderItem → order_item, 게시글 → 게시글"""
+        s = re.sub(r'([A-Z])', r'_\1', name).lower().strip('_')
+        return re.sub(r'\s+', '_', s)
 
-    @staticmethod
-    def _context_for_pair(text: str, src: str, tgt: str, sentences: list[str]) -> Optional[str]:
-        """두 엔티티를 모두 포함하는 문장을 반환한다. 없으면 두 엔티티 주변 텍스트를 잘라 반환."""
-        for sent in sentences:
-            if src in sent and tgt in sent:
-                return sent
-        # 단일 문장에 없으면 두 엔티티 위치 사이 구간을 context로 사용
-        sp, tp = text.find(src), text.find(tgt)
-        if sp < 0 or tp < 0:
-            return None
-        lo, hi = min(sp, tp), max(sp, tp) + max(len(src), len(tgt))
-        return text[max(0, lo - 20): min(len(text), hi + 20)]
-
-    def _extract_verb_lemmas(self, text: str) -> list[tuple[str, int]]:
-        """Kiwi로 텍스트에서 동사 원형과 위치를 추출한다.
-        반환: [(원형+"다", 텍스트 내 시작 위치), ...]
-        Kiwi 불가 환경에서는 빈 리스트를 반환해 폴백 경로로 이동.
-        """
-        try:
-            kiwi = get_kiwi()
-            result = kiwi.analyze(text[:KIWI_TEXT_LIMIT])
-            lemmas = []
-            for token in result[0][0]:
-                if token.tag in ("VV", "XSV"):  # 동사, 동사파생접미사
-                    lemma = token.lemma + "다"
-                    lemmas.append((lemma, token.start))
-            return lemmas
-        except Exception:
-            return []
-
-    def _extract_relationships(
-        self, text: str, entities: list[str]
+    def _infer_fk_relationships(
+        self, entities: list[EntityCandidate]
     ) -> list[RelationshipCandidate]:
-        """관계 추론 (우선순위: 임베딩 유사도 → Kiwi 원형 매칭 → 어간 폴백).
+        """엔티티 속성 이름에서 FK 패턴을 찾아 관계를 추론한다.
 
-        1) sentence-transformers 사용 가능 시:
-           엔티티 쌍이 함께 등장하는 문맥 문장을 임베딩하고 관계 타입 prototype과 유사도 비교.
-        2) Kiwi 사용 가능 시:
-           동사 원형을 추출해 RELATION_VERBS에서 관계 타입을 매칭하고 위치로 방향을 판단.
-        3) 둘 다 불가 시:
-           동사 어간을 텍스트에서 직접 검색.
+        예) 파일 엔티티에 '게시글_id' 속성이 있으면 → 파일 MANY_TO_ONE 게시글
+        패턴: {other}_id, {other}Id, {other_snake}_id (대소문자 무관)
         """
-        relationships: list[RelationshipCandidate] = []
+        relationships = []
         seen: set[tuple[str, str]] = set()
-        sentences = self._split_sentences(text)
-        embedder = get_embedder()
 
-        for i, src in enumerate(entities):
-            for tgt in entities[i + 1:]:
-                if (src, tgt) in seen:
+        for entity in entities:
+            for other in entities:
+                if other.name == entity.name:
                     continue
-
-                # ── 1단계: 임베딩 유사도 ──────────────────────────────
-                context = self._context_for_pair(text, src, tgt, sentences)
-                if context:
-                    result = embedder.classify(context)
-                    if result:
-                        rel_type, score = result
-                        logger.debug(f"Embedding: {src}→{tgt} = {rel_type} ({score:.3f})")
-                        seen.add((src, tgt))
-                        relationships.append(RelationshipCandidate(source=src, target=tgt, type=rel_type))  # type: ignore
-                        continue
-
-                # ── 2단계: Kiwi 동사 원형 매칭 ───────────────────────
-                lemmas = self._extract_verb_lemmas(context or text)
-                matched = False
-                for lemma, verb_pos in lemmas:
-                    rel_type = RELATION_VERBS.get(lemma)
-                    if not rel_type:
-                        continue
-                    src_pos = text.find(src)
-                    tgt_pos = text.find(tgt)
-                    if src_pos < 0 or tgt_pos < 0:
-                        continue
-                    lo = min(src_pos, tgt_pos)
-                    hi = max(src_pos, tgt_pos) + max(len(src), len(tgt))
-                    if lo <= verb_pos <= hi + 20:
-                        seen.add((src, tgt))
-                        relationships.append(RelationshipCandidate(source=src, target=tgt, type=rel_type))  # type: ignore
-                        matched = True
+                other_snake = self._to_snake(other.name)
+                # 매칭할 FK 패턴 목록
+                fk_patterns = {
+                    f"{other.name}_id",
+                    f"{other.name}id",
+                    f"{other_snake}_id",
+                    f"{other_snake}id",
+                    other.name,       # 외래키가 엔티티명 자체인 경우
+                }
+                for attr in entity.attributes:
+                    attr_lower = attr.lower().replace(" ", "_")
+                    if attr_lower in {p.lower() for p in fk_patterns}:
+                        key = (entity.name, other.name)
+                        if key not in seen:
+                            seen.add(key)
+                            relationships.append(RelationshipCandidate(
+                                source=entity.name,
+                                target=other.name,
+                                type="MANY_TO_ONE",
+                            ))
+                            logger.debug(f"FK inference: {entity.name}.{attr} → {other.name}")
                         break
-                if matched:
-                    continue
-
-                # ── 3단계: 어간 폴백 ─────────────────────────────────
-                for verb, rel_type in RELATION_VERBS.items():
-                    stem = verb[:-1]
-                    if stem not in (context or text):
-                        continue
-                    seen.add((src, tgt))
-                    relationships.append(RelationshipCandidate(source=src, target=tgt, type=rel_type))  # type: ignore
-                    break
 
         return relationships
 

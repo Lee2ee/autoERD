@@ -55,6 +55,9 @@ public class ApiKeyEncryptionService {
     public String decrypt(String encoded) {
         try {
             byte[] combined = Base64.getDecoder().decode(encoded);
+            if (combined.length <= GCM_IV_LENGTH) {
+                throw new IllegalArgumentException("Invalid encrypted data: too short to contain IV");
+            }
             byte[] iv = new byte[GCM_IV_LENGTH];
             byte[] ciphertext = new byte[combined.length - GCM_IV_LENGTH];
             System.arraycopy(combined, 0, iv, 0, GCM_IV_LENGTH);

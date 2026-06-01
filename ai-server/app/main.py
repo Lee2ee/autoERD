@@ -15,13 +15,16 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger = logging.getLogger(__name__)
+
     # Kiwi 모델 사전 로딩
     from app.services.nlp_service import get_kiwi
     try:
         get_kiwi()
-        logging.getLogger(__name__).info("Kiwi loaded successfully")
+        logger.info("Kiwi loaded successfully")
     except Exception as e:
-        logging.getLogger(__name__).warning(f"Kiwi load failed: {e}")
+        logger.warning(f"Kiwi load failed: {e}")
+
     yield
 
 

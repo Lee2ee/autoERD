@@ -100,6 +100,9 @@ public class ProjectController {
     }
 
     private Long userId(String bearer) {
+        if (bearer == null || !bearer.startsWith("Bearer ") || bearer.length() <= 7) {
+            throw new IllegalArgumentException("Invalid Authorization header");
+        }
         return jwtProvider.getUserId(bearer.substring(7));
     }
 }

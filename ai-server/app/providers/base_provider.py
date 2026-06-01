@@ -17,9 +17,9 @@ class BaseProvider(ABC):
 
     @abstractmethod
     async def infer_relationships(
-        self, entities: list[str], text: str
+        self, entities: list[EntityCandidate], text: str
     ) -> list[RelationshipCandidate]:
-        """엔티티 간 관계 추론 보조."""
+        """엔티티(속성 포함) 기반 관계 추론. 텍스트 문맥과 FK 패턴을 함께 활용."""
         ...
 
     @abstractmethod

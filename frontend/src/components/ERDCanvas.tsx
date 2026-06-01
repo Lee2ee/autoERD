@@ -264,6 +264,9 @@ function relationshipsToEdges(relationships: Relationship[]): Edge[] {
       markerEnd: { type: MarkerType.ArrowClosed, color: '#6b7280', width: 20, height: 20 },
       style: { strokeWidth: 2, stroke: '#6b7280' },
       animated: r.type === 'MANY_TO_MANY',
+      // 클릭 감지 영역을 선 위에만 한정 (기본 20px → 0px)
+      // 넓은 감지 영역이 노드 위에 겹쳐 노드 드래그를 방해하는 문제 해결
+      interactionWidth: 0,
     }))
 }
 
@@ -326,6 +329,7 @@ export default function ERDCanvas() {
         deleteKeyCode="Delete"
         elevateNodesOnSelect
         edgesUpdatable={false}
+        edgesFocusable={false}
       >
         <Background />
         <Controls />

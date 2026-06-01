@@ -102,7 +102,7 @@ class MockProvider(BaseProvider):
         return ENTITY_ATTRIBUTES.get(entity_name, ["이름", "설명", "생성일시"])
 
     async def infer_relationships(
-        self, entities: list[str], text: str
+        self, entities: list, text: str  # list[EntityCandidate]
     ) -> list[RelationshipCandidate]:
         return []
 
