@@ -146,6 +146,42 @@ gradlew.bat buildPlugin
 
 **Settings → AutoERD** 에서 AutoERD 서버 URL을 설정합니다 (기본값: `http://localhost:3000`).
 
+### 동작 원리
+
+```
+IDE 우클릭
+    │
+    ▼
+AnalyzeEntityAction
+    │  선택된 .java / .prisma 파일(또는 폴더) 수집
+    │  build/, target/ 등 빌드 산출물 제외
+    ▼
+JpaEntityParser (regex 기반, PSI 불필요)
+    │  @Entity 클래스 블록 추출 (중괄호 쌍 추적)
+    │  @Table(name=...) → tableName
+    │  @Id → isPrimary
+    │  @Column(nullable=false) → isNullable
+    │  @ManyToOne / @OneToMany / @OneToOne → 관계 추출
+    │  Java 타입 → SQL DataType 매핑
+    │    String → VARCHAR, Long → BIGINT, LocalDateTime → TIMESTAMP, ...
+    │  경고: 참조 대상 클래스가 분석 범위에 없으면 "관계 대상 'X'을 찾을 수 없습니다"
+    ▼
+JpaParseResult { entities, relationships, warnings }
+    │
+    ▼
+결과 다이얼로그
+    ├── [브라우저에서 열기]
+    │       JSON 직렬화
+    │       → Base64URL 인코딩 (UTF-8)
+    │       → BrowserUtil.browse("$serverUrl/projects/new#import=<encoded>")
+    │       → 프론트엔드가 해시를 파싱해 entityStore에 바로 로드
+    │
+    └── [JSON 복사]
+            JSON 직렬화 → 클립보드 복사
+```
+
+**파일을 여러 개 또는 폴더로 선택하면** 포함된 모든 `.java` / `.prisma` 파일을 한 번에 파싱하므로, 참조 관계(`@ManyToOne`, `@OneToMany` 등)도 올바르게 연결됩니다.
+
 ---
 
 ## Groq API 설정 (선택)
