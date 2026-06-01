@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import Dagre from '@dagrejs/dagre'
 import ReactFlow, {
   Node,
@@ -29,15 +29,20 @@ import { useEntityStore } from '../stores/entityStore'
 import { useProjectStore } from '../stores/projectStore'
 import { Entity, Relationship, RelationType } from '../types'
 
+const HANDLE_CLASS = '!opacity-0 hover:!opacity-100 !w-2.5 !h-2.5 !transition-opacity !bg-primary-300 !border-primary-500'
+
 function ERDNode({ data }: NodeProps<Entity>) {
   return (
     <div className="bg-white rounded-lg shadow-lg border-2 border-primary-500 min-w-[220px] text-xs">
-      {/* Handle은 호버 시에만 표시하여 드래그 중 실수로 잡히는 것을 방지 */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="!opacity-0 hover:!opacity-100 !w-3 !h-3 !transition-opacity"
-      />
+      {/* 상하좌우 모든 방향에 Handle을 두어 엣지가 최적 방향으로 연결됨 */}
+      <Handle type="target" position={Position.Top}    id="top"    className={HANDLE_CLASS} />
+      <Handle type="target" position={Position.Right}  id="right"  className={HANDLE_CLASS} />
+      <Handle type="target" position={Position.Bottom} id="bottom" className={HANDLE_CLASS} />
+      <Handle type="target" position={Position.Left}   id="left"   className={HANDLE_CLASS} />
+      <Handle type="source" position={Position.Top}    id="top"    className={HANDLE_CLASS} />
+      <Handle type="source" position={Position.Right}  id="right"  className={HANDLE_CLASS} />
+      <Handle type="source" position={Position.Bottom} id="bottom" className={HANDLE_CLASS} />
+      <Handle type="source" position={Position.Left}   id="left"   className={HANDLE_CLASS} />
       <div className="bg-primary-600 text-white px-3 py-1.5 rounded-t-md">
         <div className="font-bold">{data.name}</div>
         <div className="text-primary-200 font-mono">{data.tableName}</div>
@@ -62,11 +67,6 @@ function ERDNode({ data }: NodeProps<Entity>) {
           </div>
         ))}
       </div>
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!opacity-0 hover:!opacity-100 !w-3 !h-3 !transition-opacity"
-      />
     </div>
   )
 }
@@ -75,11 +75,14 @@ function ERDNode({ data }: NodeProps<Entity>) {
 function RelationshipEdge({
   sourceX, sourceY, targetX, targetY,
   sourcePosition, targetPosition,
-  label, markerEnd, style,
+  label, markerEnd, style, data,
 }: EdgeProps) {
+  const offset = (data as { offset?: number } | undefined)?.offset ?? 0
   const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourceX, sourceY, sourcePosition,
     targetX, targetY, targetPosition,
+    borderRadius: 8,
+    offset,
   })
 
   return (
@@ -164,6 +167,31 @@ function AutoLayoutButton() {
       </button>
     </div>
   )
+}
+
+/** 엔티티가 처음 추가될 때(0→N) 자동으로 Dagre 레이아웃 적용 */
+function AutoLayoutOnLoad() {
+  const { getNodes, getEdges, fitView } = useReactFlow()
+  const { entities, updateEntity } = useEntityStore()
+  const prevCount = useRef(0)
+
+  useEffect(() => {
+    const prev = prevCount.current
+    prevCount.current = entities.length
+    if (prev === 0 && entities.length > 0) {
+      // 노드가 ReactFlow 상태에 반영되도록 한 프레임 대기
+      setTimeout(() => {
+        const nodes = getNodes()
+        const edges = getEdges()
+        if (nodes.length === 0) return
+        const layouted = calcDagreLayout(nodes, edges, 'LR')
+        layouted.forEach((n) => updateEntity(n.id, { position: n.position }))
+        setTimeout(() => fitView({ duration: 500, padding: 0.12 }), 50)
+      }, 50)
+    }
+  }, [entities.length, getNodes, getEdges, fitView, updateEntity])
+
+  return null
 }
 
 function ExportButton() {
@@ -252,22 +280,71 @@ function entitiesToNodes(entities: Entity[]): Node<Entity>[] {
   }))
 }
 
-function relationshipsToEdges(relationships: Relationship[]): Edge[] {
-  return relationships
-    .filter((r) => r.sourceEntityId !== r.targetEntityId) // 자기 참조 관계 제외
-    .map((r) => ({
-      id: r.id,
-      type: 'relationship',
-      source: r.sourceEntityId,
-      target: r.targetEntityId,
-      label: REL_LABEL[r.type],
-      markerEnd: { type: MarkerType.ArrowClosed, color: '#6b7280', width: 20, height: 20 },
-      style: { strokeWidth: 2, stroke: '#6b7280' },
-      animated: r.type === 'MANY_TO_MANY',
-      // 클릭 감지 영역을 선 위에만 한정 (기본 20px → 0px)
-      // 넓은 감지 영역이 노드 위에 겹쳐 노드 드래그를 방해하는 문제 해결
-      interactionWidth: 0,
-    }))
+/** 두 노드의 상대 위치를 기반으로 최적 Handle 방향을 결정 */
+function getBestHandles(src: Entity, tgt: Entity): { sourceHandle: string; targetHandle: string } {
+  const dx = (tgt.position?.x ?? 0) - (src.position?.x ?? 0)
+  const dy = (tgt.position?.y ?? 0) - (src.position?.y ?? 0)
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0
+      ? { sourceHandle: 'right', targetHandle: 'left' }
+      : { sourceHandle: 'left',  targetHandle: 'right' }
+  } else {
+    return dy >= 0
+      ? { sourceHandle: 'bottom', targetHandle: 'top' }
+      : { sourceHandle: 'top',    targetHandle: 'bottom' }
+  }
+}
+
+/**
+ * 같은 소스 노드+핸들에서 나가는 엣지들에 offset을 균등 배분
+ * → getSmoothStepPath의 offset이 중간 꺾임 위치를 이동시켜 선이 분리됨
+ */
+function assignOffsets(items: Array<{ sourceId: string; sourceHandle: string }>): number[] {
+  const STEP = 40
+  const groups = new Map<string, number[]>()
+  items.forEach(({ sourceId, sourceHandle }, i) => {
+    const key = `${sourceId}:${sourceHandle}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(i)
+  })
+  const offsets = new Array(items.length).fill(0)
+  for (const indices of groups.values()) {
+    if (indices.length <= 1) continue
+    indices.forEach((idx, i) => {
+      offsets[idx] = (i - (indices.length - 1) / 2) * STEP
+    })
+  }
+  return offsets
+}
+
+function relationshipsToEdges(relationships: Relationship[], entities: Entity[]): Edge[] {
+  const entityMap = new Map(entities.map((e) => [e.id, e]))
+  const filtered = relationships.filter((r) => r.sourceEntityId !== r.targetEntityId)
+
+  const handlePairs = filtered.map((r) => {
+    const src = entityMap.get(r.sourceEntityId)
+    const tgt = entityMap.get(r.targetEntityId)
+    return src && tgt ? getBestHandles(src, tgt) : { sourceHandle: 'right', targetHandle: 'left' }
+  })
+
+  const offsets = assignOffsets(
+    filtered.map((r, i) => ({ sourceId: r.sourceEntityId, sourceHandle: handlePairs[i].sourceHandle }))
+  )
+
+  return filtered.map((r, i) => ({
+    id: r.id,
+    type: 'relationship',
+    source: r.sourceEntityId,
+    target: r.targetEntityId,
+    sourceHandle: handlePairs[i].sourceHandle,
+    targetHandle: handlePairs[i].targetHandle,
+    label: REL_LABEL[r.type],
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#6b7280', width: 20, height: 20 },
+    style: { strokeWidth: 2, stroke: '#6b7280' },
+    animated: r.type === 'MANY_TO_MANY',
+    interactionWidth: 0,
+    data: { offset: offsets[i] },
+  }))
 }
 
 export default function ERDCanvas() {
@@ -275,15 +352,15 @@ export default function ERDCanvas() {
     useEntityStore()
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Entity>(entitiesToNodes(entities))
-  const [edges, setEdges, onEdgesChange] = useEdgesState(relationshipsToEdges(relationships))
+  const [edges, setEdges, onEdgesChange] = useEdgesState(relationshipsToEdges(relationships, entities))
 
   useEffect(() => {
     setNodes(entitiesToNodes(entities))
   }, [entities, setNodes])
 
   useEffect(() => {
-    setEdges(relationshipsToEdges(relationships))
-  }, [relationships, setEdges])
+    setEdges(relationshipsToEdges(relationships, entities))
+  }, [relationships, entities, setEdges])
 
   const onNodeDragStop = useCallback(
     (_event: React.MouseEvent, node: Node) => {
@@ -335,6 +412,7 @@ export default function ERDCanvas() {
         <Controls />
         <MiniMap />
         <ExportButton />
+        <AutoLayoutOnLoad />
       </ReactFlow>
     </div>
   )
