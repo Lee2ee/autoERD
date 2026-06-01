@@ -137,14 +137,36 @@ export default function RequirementInput() {
       }
 
       // AUDIT 규칙 → created_at / updated_at 컬럼 자동 추가
+      // 한국어 동의어(생성일자/수정일자/생성일시/수정일시 등)가 있으면 제거 후 표준 컬럼으로 교체
+      const CREATED_AT_SYNONYMS = /^(생성일|created_at|createdat|create_date|생성일자|생성일시)$/i
+      const UPDATED_AT_SYNONYMS = /^(수정일|updated_at|updatedat|update_date|수정일자|수정일시|변경일|변경일자|변경일시)$/i
+
       for (const rule of businessRules) {
         if (rule.ruleType !== 'AUDIT') continue
         const entity = currentEntities.find(
           (e) => e.name === rule.entity || e.tableName === toSnakeCase(rule.entity)
         )
         if (!entity) continue
-        const hasCreatedAt = entity.attributes.some((a) => a.columnName === 'created_at')
-        const hasUpdatedAt = entity.attributes.some((a) => a.columnName === 'updated_at')
+
+        const store = useEntityStore.getState()
+
+        // 기존 동의어 컬럼 제거
+        for (const attr of entity.attributes) {
+          if (attr.columnName !== 'created_at' && CREATED_AT_SYNONYMS.test(attr.columnName ?? attr.name)) {
+            store.removeAttribute(entity.id, attr.id)
+          }
+          if (attr.columnName !== 'updated_at' && UPDATED_AT_SYNONYMS.test(attr.columnName ?? attr.name)) {
+            store.removeAttribute(entity.id, attr.id)
+          }
+        }
+
+        // 제거 후 최신 상태로 다시 확인
+        const latestEntity = useEntityStore.getState().entities.find((e) => e.id === entity.id)
+        if (!latestEntity) continue
+
+        const hasCreatedAt = latestEntity.attributes.some((a) => a.columnName === 'created_at')
+        const hasUpdatedAt = latestEntity.attributes.some((a) => a.columnName === 'updated_at')
+
         if (!hasCreatedAt) {
           useEntityStore.getState().addAttribute(entity.id, {
             name: '생성일시',

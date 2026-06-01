@@ -5,9 +5,12 @@ NLP 처리 서비스.
 """
 import hashlib
 import logging
+import re
 from collections import OrderedDict
+from typing import Optional
 from app.models.schemas import AnalyzeResponse, EntityCandidate, RelationshipCandidate, BusinessRule
 from app.providers.base_provider import BaseProvider
+from app.services.relation_embedder import get_embedder
 
 KIWI_TEXT_LIMIT = 20000     # Kiwi 형태소 분석 최대 입력 길이 (OOM 방지)
 MAX_ENTITY_CANDIDATES = 30  # 엔티티 후보 최대 수 (관계 탐색 O(n²) 방지)
@@ -68,14 +71,46 @@ RELATION_PATTERNS = [
     (["은", "는"], ["하나의", "1개의"], "MANY_TO_ONE"),
 ]
 
-# 관계 동사 → 관계 타입
+# 관계 동사 원형 → 관계 타입
+# Kiwi가 활용형(가진/가지는/가집니다 등)을 모두 원형으로 정규화하므로 원형만 등록한다.
+# Kiwi 불가 환경에서는 이 키워드를 텍스트 포함 여부로 폴백 매칭한다.
 RELATION_VERBS = {
-    "주문": "ONE_TO_MANY",
-    "포함": "ONE_TO_MANY",
-    "가진": "ONE_TO_MANY",
-    "속한": "MANY_TO_ONE",
-    "결제": "ONE_TO_ONE",
-    "배송": "ONE_TO_ONE",
+    # ── ONE_TO_MANY ─────────────────────────────────────────
+    "가지다": "ONE_TO_MANY",   # 가진, 가지는, 가집니다
+    "갖다": "ONE_TO_MANY",    # 갖는, 갖고
+    "포함하다": "ONE_TO_MANY", # 포함한, 포함하는, 포함됩니다
+    "포함되다": "ONE_TO_MANY",
+    "등록하다": "ONE_TO_MANY", # 등록한, 등록하는
+    "작성하다": "ONE_TO_MANY", # 작성한, 작성하는
+    "게시하다": "ONE_TO_MANY",
+    "업로드하다": "ONE_TO_MANY",
+    "관리하다": "ONE_TO_MANY",
+    "보유하다": "ONE_TO_MANY",
+    "소유하다": "ONE_TO_MANY",
+    "생성하다": "ONE_TO_MANY",
+    "발급하다": "ONE_TO_MANY",
+    "발생하다": "ONE_TO_MANY",
+    "처리하다": "ONE_TO_MANY",
+    "담다": "ONE_TO_MANY",
+    # ── MANY_TO_ONE ─────────────────────────────────────────
+    "속하다": "MANY_TO_ONE",   # 속한, 속하는, 속합니다
+    "소속되다": "MANY_TO_ONE",
+    "귀속되다": "MANY_TO_ONE",
+    "참조하다": "MANY_TO_ONE",
+    "연결되다": "MANY_TO_ONE",
+    "종속되다": "MANY_TO_ONE",
+    # ── ONE_TO_ONE ───────────────────────────────────────────
+    "대응하다": "ONE_TO_ONE",
+    "매핑되다": "ONE_TO_ONE",
+    "연동되다": "ONE_TO_ONE",
+    # ── MANY_TO_MANY ─────────────────────────────────────────
+    "수강하다": "MANY_TO_MANY",
+    "구독하다": "MANY_TO_MANY",
+    "참여하다": "MANY_TO_MANY",
+    "좋아하다": "MANY_TO_MANY",
+    "태그하다": "MANY_TO_MANY",
+    "찜하다": "MANY_TO_MANY",
+    "공유하다": "MANY_TO_MANY",
 }
 
 # ── 업무 규칙 키워드 ─────────────────────────────────────────
@@ -223,29 +258,104 @@ class NlpService:
 
         return (subjects + others)[:MAX_ENTITY_CANDIDATES]
 
+    @staticmethod
+    def _split_sentences(text: str) -> list[str]:
+        """텍스트를 문장 단위로 분리한다."""
+        return [s.strip() for s in re.split(r'[.。!?\n]+', text) if s.strip()]
+
+    @staticmethod
+    def _context_for_pair(text: str, src: str, tgt: str, sentences: list[str]) -> Optional[str]:
+        """두 엔티티를 모두 포함하는 문장을 반환한다. 없으면 두 엔티티 주변 텍스트를 잘라 반환."""
+        for sent in sentences:
+            if src in sent and tgt in sent:
+                return sent
+        # 단일 문장에 없으면 두 엔티티 위치 사이 구간을 context로 사용
+        sp, tp = text.find(src), text.find(tgt)
+        if sp < 0 or tp < 0:
+            return None
+        lo, hi = min(sp, tp), max(sp, tp) + max(len(src), len(tgt))
+        return text[max(0, lo - 20): min(len(text), hi + 20)]
+
+    def _extract_verb_lemmas(self, text: str) -> list[tuple[str, int]]:
+        """Kiwi로 텍스트에서 동사 원형과 위치를 추출한다.
+        반환: [(원형+"다", 텍스트 내 시작 위치), ...]
+        Kiwi 불가 환경에서는 빈 리스트를 반환해 폴백 경로로 이동.
+        """
+        try:
+            kiwi = get_kiwi()
+            result = kiwi.analyze(text[:KIWI_TEXT_LIMIT])
+            lemmas = []
+            for token in result[0][0]:
+                if token.tag in ("VV", "XSV"):  # 동사, 동사파생접미사
+                    lemma = token.lemma + "다"
+                    lemmas.append((lemma, token.start))
+            return lemmas
+        except Exception:
+            return []
+
     def _extract_relationships(
         self, text: str, entities: list[str]
     ) -> list[RelationshipCandidate]:
-        """규칙 기반 관계 추론."""
-        relationships = []
+        """관계 추론 (우선순위: 임베딩 유사도 → Kiwi 원형 매칭 → 어간 폴백).
 
-        # 패턴: "A는 여러 B를 가진다" → A 1:N B
-        for verb, rel_type in RELATION_VERBS.items():
-            if verb in text:
-                for i, src in enumerate(entities):
-                    for tgt in entities[i + 1:]:
-                        if src in text and tgt in text:
-                            src_pos = text.find(src)
-                            tgt_pos = text.find(tgt)
-                            verb_pos = text.find(verb)
-                            if src_pos < verb_pos < tgt_pos or src_pos < tgt_pos < verb_pos:
-                                relationships.append(
-                                    RelationshipCandidate(
-                                        source=src,
-                                        target=tgt,
-                                        type=rel_type,  # type: ignore
-                                    )
-                                )
+        1) sentence-transformers 사용 가능 시:
+           엔티티 쌍이 함께 등장하는 문맥 문장을 임베딩하고 관계 타입 prototype과 유사도 비교.
+        2) Kiwi 사용 가능 시:
+           동사 원형을 추출해 RELATION_VERBS에서 관계 타입을 매칭하고 위치로 방향을 판단.
+        3) 둘 다 불가 시:
+           동사 어간을 텍스트에서 직접 검색.
+        """
+        relationships: list[RelationshipCandidate] = []
+        seen: set[tuple[str, str]] = set()
+        sentences = self._split_sentences(text)
+        embedder = get_embedder()
+
+        for i, src in enumerate(entities):
+            for tgt in entities[i + 1:]:
+                if (src, tgt) in seen:
+                    continue
+
+                # ── 1단계: 임베딩 유사도 ──────────────────────────────
+                context = self._context_for_pair(text, src, tgt, sentences)
+                if context:
+                    result = embedder.classify(context)
+                    if result:
+                        rel_type, score = result
+                        logger.debug(f"Embedding: {src}→{tgt} = {rel_type} ({score:.3f})")
+                        seen.add((src, tgt))
+                        relationships.append(RelationshipCandidate(source=src, target=tgt, type=rel_type))  # type: ignore
+                        continue
+
+                # ── 2단계: Kiwi 동사 원형 매칭 ───────────────────────
+                lemmas = self._extract_verb_lemmas(context or text)
+                matched = False
+                for lemma, verb_pos in lemmas:
+                    rel_type = RELATION_VERBS.get(lemma)
+                    if not rel_type:
+                        continue
+                    src_pos = text.find(src)
+                    tgt_pos = text.find(tgt)
+                    if src_pos < 0 or tgt_pos < 0:
+                        continue
+                    lo = min(src_pos, tgt_pos)
+                    hi = max(src_pos, tgt_pos) + max(len(src), len(tgt))
+                    if lo <= verb_pos <= hi + 20:
+                        seen.add((src, tgt))
+                        relationships.append(RelationshipCandidate(source=src, target=tgt, type=rel_type))  # type: ignore
+                        matched = True
+                        break
+                if matched:
+                    continue
+
+                # ── 3단계: 어간 폴백 ─────────────────────────────────
+                for verb, rel_type in RELATION_VERBS.items():
+                    stem = verb[:-1]
+                    if stem not in (context or text):
+                        continue
+                    seen.add((src, tgt))
+                    relationships.append(RelationshipCandidate(source=src, target=tgt, type=rel_type))  # type: ignore
+                    break
+
         return relationships
 
     def _merge_relationships(

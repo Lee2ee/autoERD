@@ -32,7 +32,12 @@ import { Entity, Relationship, RelationType } from '../types'
 function ERDNode({ data }: NodeProps<Entity>) {
   return (
     <div className="bg-white rounded-lg shadow-lg border-2 border-primary-500 min-w-[220px] text-xs">
-      <Handle type="target" position={Position.Left} />
+      {/* Handle은 호버 시에만 표시하여 드래그 중 실수로 잡히는 것을 방지 */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!opacity-0 hover:!opacity-100 !w-3 !h-3 !transition-opacity"
+      />
       <div className="bg-primary-600 text-white px-3 py-1.5 rounded-t-md">
         <div className="font-bold">{data.name}</div>
         <div className="text-primary-200 font-mono">{data.tableName}</div>
@@ -57,7 +62,11 @@ function ERDNode({ data }: NodeProps<Entity>) {
           </div>
         ))}
       </div>
-      <Handle type="source" position={Position.Right} />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!opacity-0 hover:!opacity-100 !w-3 !h-3 !transition-opacity"
+      />
     </div>
   )
 }
@@ -244,16 +253,18 @@ function entitiesToNodes(entities: Entity[]): Node<Entity>[] {
 }
 
 function relationshipsToEdges(relationships: Relationship[]): Edge[] {
-  return relationships.map((r) => ({
-    id: r.id,
-    type: 'relationship',
-    source: r.sourceEntityId,
-    target: r.targetEntityId,
-    label: REL_LABEL[r.type],
-    markerEnd: { type: MarkerType.ArrowClosed, color: '#6b7280', width: 20, height: 20 },
-    style: { strokeWidth: 2, stroke: '#6b7280' },
-    animated: r.type === 'MANY_TO_MANY',
-  }))
+  return relationships
+    .filter((r) => r.sourceEntityId !== r.targetEntityId) // 자기 참조 관계 제외
+    .map((r) => ({
+      id: r.id,
+      type: 'relationship',
+      source: r.sourceEntityId,
+      target: r.targetEntityId,
+      label: REL_LABEL[r.type],
+      markerEnd: { type: MarkerType.ArrowClosed, color: '#6b7280', width: 20, height: 20 },
+      style: { strokeWidth: 2, stroke: '#6b7280' },
+      animated: r.type === 'MANY_TO_MANY',
+    }))
 }
 
 export default function ERDCanvas() {
@@ -280,7 +291,8 @@ export default function ERDCanvas() {
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (connection.source && connection.target) {
+      // 자기 자신 연결 방지
+      if (connection.source && connection.target && connection.source !== connection.target) {
         addRelationship({
           sourceEntityId: connection.source,
           targetEntityId: connection.target,
@@ -312,6 +324,8 @@ export default function ERDCanvas() {
         edgeTypes={edgeTypes}
         fitView
         deleteKeyCode="Delete"
+        elevateNodesOnSelect
+        edgesUpdatable={false}
       >
         <Background />
         <Controls />
