@@ -10,6 +10,23 @@
 
     <depends>com.intellij.modules.platform</depends>
 
+    <!-- 우클릭 컨텍스트 메뉴 액션 -->
+    <actions>
+        <group id="AutoErdActions" text="AutoERD" popup="true">
+            <!-- 프로젝트 탐색기 우클릭 메뉴 -->
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <!-- 에디터 우클릭 메뉴 -->
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </group>
+
+        <action id="com.autoerd.plugin.actions.AnalyzeEntityAction"
+                class="com.autoerd.plugin.actions.AnalyzeEntityAction"
+                text="AutoERD로 분석"
+                description="선택한 Java/@Entity 파일 또는 폴더를 파싱해서 AutoERD ERD 생성">
+            <add-to-group group-id="AutoErdActions" anchor="first"/>
+        </action>
+    </actions>
+
     <extensions defaultExtensionNs="com.intellij">
         <!-- Tool Window (우측 패널) -->
         <toolWindow

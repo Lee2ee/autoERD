@@ -14,6 +14,18 @@
         "command": "autoerd.open",
         "title": "AutoERD: 열기",
         "icon": "$(database)"
+      },
+      {
+        "command": "autoerd.analyzeFile",
+        "title": "AutoERD로 분석"
+      },
+      {
+        "command": "autoerd.analyzeFolder",
+        "title": "AutoERD: 폴더 내 엔티티 전체 분석"
+      },
+      {
+        "command": "autoerd.saveDDL",
+        "title": "AutoERD: DDL을 마이그레이션 파일로 저장"
       }
     ],
     "configuration": {
@@ -23,6 +35,17 @@
           "type": "string",
           "default": "http://localhost:3000",
           "description": "AutoERD 프론트엔드 서버 URL"
+        },
+        "autoerd.migrationFormat": {
+          "type": "string",
+          "enum": ["flyway", "liquibase", "plain"],
+          "default": "flyway",
+          "description": "DDL 저장 시 마이그레이션 포맷 (flyway: V{n}__*.sql, liquibase: *.xml)"
+        },
+        "autoerd.migrationDir": {
+          "type": "string",
+          "default": "src/main/resources/db/migration",
+          "description": "마이그레이션 파일 저장 경로 (프로젝트 루트 기준 상대 경로)"
         }
       }
     },
@@ -31,6 +54,25 @@
         {
           "command": "autoerd.open",
           "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "autoerd.analyzeFile",
+          "when": "resourceExtname == .java || resourceExtname == .prisma",
+          "group": "autoerd@1"
+        },
+        {
+          "command": "autoerd.analyzeFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "autoerd@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "autoerd.analyzeFile",
+          "when": "resourceExtname == .java || resourceExtname == .prisma",
+          "group": "autoerd@1"
         }
       ]
     }

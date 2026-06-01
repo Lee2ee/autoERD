@@ -6,12 +6,14 @@ import { analyzeRequirement } from '../api'
 import { v4 as uuidv4 } from 'uuid'
 import { toSnakeCase } from '../utils/naming'
 import { DataType, Attribute, BusinessRule, RateLimitInfo } from '../types'
+import CodeImportModal from './CodeImportModal'
 
 export default function RequirementInput() {
   const { text, setText, isAnalyzing, setAnalyzing, setError, rateLimit, setRateLimit } = useRequirementStore()
   const { entities, addEntity, addRelationship, updateAttribute, setBusinessRules, addBusinessRules, reset } = useEntityStore()
   const [localText, setLocalText] = useState(text)
   const [modalOpen, setModalOpen] = useState(false)
+  const [importModalOpen, setImportModalOpen] = useState(false)
   const hasEntities = entities.length > 0
 
   const handleAnalyze = async (textToAnalyze = localText, merge = false) => {
@@ -229,8 +231,18 @@ export default function RequirementInput() {
         >
           {localText.trim() ? '요구사항 수정 / 재분석' : '요구사항 작성하기'}
         </button>
+        <button
+          className="w-full mt-2 border border-gray-300 text-gray-600 py-1.5 rounded-md text-xs font-medium hover:bg-gray-50 hover:border-gray-400 transition-colors"
+          onClick={() => setImportModalOpen(true)}
+        >
+          코드에서 가져오기 (JPA / Prisma)
+        </button>
         {rateLimit && <RateLimitBar info={rateLimit} />}
       </div>
+
+      {importModalOpen && (
+        <CodeImportModal onClose={() => setImportModalOpen(false)} />
+      )}
 
       {modalOpen && (
         <RequirementModal
