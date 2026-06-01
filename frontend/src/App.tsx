@@ -33,6 +33,23 @@ function EditorPage() {
   const { setEntities, setRelationships, setBusinessRules } = useEntityStore()
   const { setText } = useRequirementStore()
 
+  // 플러그인에서 #import=<base64url> 해시로 엔티티 가져오기
+  useEffect(() => {
+    const hash = window.location.hash
+    if (!hash.startsWith('#import=')) return
+    try {
+      const encoded = hash.slice('#import='.length).replace(/-/g, '+').replace(/_/g, '/')
+      const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0))
+      const json = new TextDecoder().decode(bytes)
+      const data = JSON.parse(json)
+      if (data.entities) setEntities(data.entities)
+      if (data.relationships) setRelationships(data.relationships)
+      history.replaceState(null, '', window.location.pathname)
+    } catch (e) {
+      console.error('AutoERD import 실패:', e)
+    }
+  }, [])
+
   useEffect(() => {
     if (!id) return
     setLoading(true)

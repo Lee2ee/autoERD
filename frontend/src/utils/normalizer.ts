@@ -155,7 +155,7 @@ function apply3NF(
     const toRemove = new Set<string>()
 
     for (const attr of entity.attrs) {
-      if (attr.isPrimary || attr.isForeign) continue
+      if (attr.isPrimary) continue
       const prefix = extractFKPrefix(attr.name)
       if (!prefix) continue
 

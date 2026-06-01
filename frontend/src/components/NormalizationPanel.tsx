@@ -83,13 +83,14 @@ export default function NormalizationPanel() {
 
       /** 다른 결과 엔티티를 참조하는 FK-like 속성인지 판별
        *  (e.g. "고객ID" → prefix "고객" → resultEntityNames에 존재 → true)
+       *  단, 자기 자신 엔티티의 자연키(e.g. 고객 엔티티의 고객ID)는 스킵하지 않음
        *  addRelationship이 올바른 isForeign/referencedEntityId와 함께 자동 생성하므로 스킵
        */
-      const isFKRef = (attrName: string) =>
+      const isFKRef = (attrName: string, entityName: string) =>
         FK_SUFFIXES.some((suffix) => {
           if (!attrName.endsWith(suffix)) return false
           const prefix = attrName.slice(0, -suffix.length)
-          return prefix.length >= 2 && resultEntityNames.has(prefix)
+          return prefix.length >= 2 && resultEntityNames.has(prefix) && prefix !== entityName
         })
 
       for (const e of result.entities) {
@@ -97,8 +98,8 @@ export default function NormalizationPanel() {
         entityIdMap[e.name] = entity.id
 
         for (const attrName of e.attributes) {
-          // FK 참조 속성은 스킵 — addRelationship이 메타데이터 포함해 자동 추가
-          if (isFKRef(attrName)) continue
+          // 다른 엔티티를 참조하는 FK 속성은 스킵 — addRelationship이 메타데이터 포함해 자동 추가
+          if (isFKRef(attrName, e.name)) continue
 
           const columnName = toSnakeCase(attrName)
           const existing = useEntityStore.getState().entities
@@ -106,15 +107,20 @@ export default function NormalizationPanel() {
             ?.attributes.some((a) => a.columnName === columnName)
           if (existing) continue
 
+          // 자기 자신 엔티티의 자연키(e.g. 고객 엔티티의 고객ID)는 NOT NULL + UNIQUE
+          const isNaturalKey = FK_SUFFIXES.some((suffix) => {
+            if (!attrName.endsWith(suffix)) return false
+            return attrName.slice(0, -suffix.length) === e.name
+          })
           const attr: Partial<Attribute> = {
             id: uuidv4(),
             name: attrName,
             columnName,
             type: inferType(attrName),
-            isNullable: true,
+            isNullable: !isNaturalKey,
             isPrimary: false,
             isForeign: false,
-            isUnique: false,
+            isUnique: isNaturalKey,
           }
           useEntityStore.getState().addAttribute(entity.id, attr)
         }
