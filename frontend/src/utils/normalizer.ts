@@ -146,8 +146,10 @@ function apply3NF(
 ): WorkingEntity[] {
   const extracted = new Map<string, Set<string>>() // prefix → attr names
   const modified: WorkingEntity[] = []
-  // 루프 중 생성되는 신규 엔티티도 추가해 중복 방지
+  // 원본 엔티티명만 보관 (루프 중 수정하지 않음)
   const existingNames = new Set(entities.map((e) => e.name))
+  // 변경 로그/관계 중복 방지용 별도 집합 (existingNames와 혼용하면 최종 엔티티 추가가 막힘)
+  const loggedPrefixes = new Set<string>()
 
   for (const entity of entities) {
     const toRemove = new Set<string>()
@@ -176,13 +178,15 @@ function apply3NF(
         toRemove.add(dep.name)
       }
 
-      if (!existingNames.has(prefix)) {
-        existingNames.add(prefix) // 동일 루프에서 중복 엔티티 생성 방지
-        changes.push(
-          `[${entity.name}] '${dependents.map((d) => d.name).join(', ')}' → ` +
-            `'${prefix}' 엔티티로 분리 (${prefix}ID에 이행 종속, 3NF)`,
-        )
-        // 중복 관계 방지
+      // 변경 로그와 관계는 prefix당 한 번만 기록 (loggedPrefixes로 중복 방지)
+      if (!loggedPrefixes.has(prefix)) {
+        loggedPrefixes.add(prefix)
+        if (!existingNames.has(prefix)) {
+          changes.push(
+            `[${entity.name}] '${dependents.map((d) => d.name).join(', ')}' → ` +
+              `'${prefix}' 엔티티로 분리 (${prefix}ID에 이행 종속, 3NF)`,
+          )
+        }
         if (!rels.find((r) => r.source === entity.name && r.target === prefix)) {
           rels.push({ source: entity.name, target: prefix, type: 'MANY_TO_ONE' })
         }
@@ -195,14 +199,13 @@ function apply3NF(
     })
   }
 
-  // 새로 추출된 엔티티 추가
+  // 새로 추출된 엔티티 추가 — existingNames는 원본만 담으므로 정확히 신규 엔티티만 추가됨
   for (const [prefix, attrSet] of extracted) {
     if (!existingNames.has(prefix)) {
-      const attrList = [...attrSet]
       modified.push({
         name: prefix,
         description: `${prefix} 정보`,
-        attrs: attrList.map((name, i) => ({
+        attrs: [...attrSet].map((name, i) => ({
           name,
           isPrimary: i === 0,
           isForeign: false,

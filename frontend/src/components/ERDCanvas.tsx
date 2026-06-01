@@ -169,25 +169,38 @@ function AutoLayoutButton() {
   )
 }
 
-/** 엔티티가 처음 추가될 때(0→N) 자동으로 Dagre 레이아웃 적용 */
+/**
+ * 빈 상태(0개)에서 엔티티가 추가되기 시작하면 Dagre 레이아웃을 자동 적용.
+ * 정규화처럼 엔티티가 1개씩 순차 추가되는 경우를 위해 디바운스(200ms) 처리.
+ * 마지막 엔티티가 추가된 뒤 200ms가 지나야 레이아웃이 실행된다.
+ */
 function AutoLayoutOnLoad() {
   const { getNodes, getEdges, fitView } = useReactFlow()
   const { entities, updateEntity } = useEntityStore()
-  const prevCount = useRef(0)
+  const wasEmpty = useRef(true)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    const prev = prevCount.current
-    prevCount.current = entities.length
-    if (prev === 0 && entities.length > 0) {
-      // 노드가 ReactFlow 상태에 반영되도록 한 프레임 대기
-      setTimeout(() => {
-        const nodes = getNodes()
-        const edges = getEdges()
-        if (nodes.length === 0) return
-        const layouted = calcDagreLayout(nodes, edges, 'LR')
-        layouted.forEach((n) => updateEntity(n.id, { position: n.position }))
-        setTimeout(() => fitView({ duration: 500, padding: 0.12 }), 50)
-      }, 50)
+    if (entities.length === 0) {
+      wasEmpty.current = true
+      return
+    }
+    if (!wasEmpty.current) return // 이미 레이아웃된 상태 — 추가 트리거 불필요
+
+    // 0에서 증가 중: 타이머를 매번 리셋해 마지막 엔티티 후 200ms 뒤에만 실행
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => {
+      wasEmpty.current = false
+      const nodes = getNodes()
+      const edges = getEdges()
+      if (nodes.length === 0) return
+      const layouted = calcDagreLayout(nodes, edges, 'LR')
+      layouted.forEach((n) => updateEntity(n.id, { position: n.position }))
+      setTimeout(() => fitView({ duration: 500, padding: 0.12 }), 50)
+    }, 200)
+
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
     }
   }, [entities.length, getNodes, getEdges, fitView, updateEntity])
 

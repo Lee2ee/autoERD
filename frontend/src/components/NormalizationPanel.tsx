@@ -76,11 +76,30 @@ export default function NormalizationPanel() {
 
       // 정규화된 엔티티 적용
       const entityIdMap: Record<string, string> = {}
+      // 결과 엔티티명 집합 — FK 참조 속성 필터링에 사용
+      const resultEntityNames = new Set(result.entities.map((e) => e.name))
+      // FK_SUFFIXES: normalizer.ts와 동일한 기준
+      const FK_SUFFIXES = ['ID', 'Id', '아이디', '번호']
+
+      /** 다른 결과 엔티티를 참조하는 FK-like 속성인지 판별
+       *  (e.g. "고객ID" → prefix "고객" → resultEntityNames에 존재 → true)
+       *  addRelationship이 올바른 isForeign/referencedEntityId와 함께 자동 생성하므로 스킵
+       */
+      const isFKRef = (attrName: string) =>
+        FK_SUFFIXES.some((suffix) => {
+          if (!attrName.endsWith(suffix)) return false
+          const prefix = attrName.slice(0, -suffix.length)
+          return prefix.length >= 2 && resultEntityNames.has(prefix)
+        })
+
       for (const e of result.entities) {
         const entity = addEntity(e.name, e.description)
         entityIdMap[e.name] = entity.id
 
         for (const attrName of e.attributes) {
+          // FK 참조 속성은 스킵 — addRelationship이 메타데이터 포함해 자동 추가
+          if (isFKRef(attrName)) continue
+
           const columnName = toSnakeCase(attrName)
           const existing = useEntityStore.getState().entities
             .find((en) => en.id === entity.id)
