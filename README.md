@@ -184,6 +184,73 @@ JpaParseResult { entities, relationships, warnings }
 
 ---
 
+## VS Code 익스텐션
+
+`vscode-extension/` 디렉터리에 포함된 VS Code 익스텐션으로, IntelliJ 플러그인과 동일한 분석 기능에 더해 **WebView 내장 브라우저**와 **마이그레이션 파일 저장** 기능을 제공합니다.
+
+### 빌드 및 설치
+
+```cmd
+cd vscode-extension
+npm install
+npm run package
+```
+
+생성된 `autoerd-*.vsix` 파일을 VS Code → **Extensions → ... → Install from VSIX**에서 설치합니다.
+
+### 명령어
+
+| 명령어 | 설명 |
+|--------|------|
+| `AutoERD: 열기` | VS Code 내 WebView 패널로 AutoERD 앱을 엽니다 (iframe 내장) |
+| `AutoERD로 분석` | `.java` / `.prisma` 파일 우클릭 또는 에디터 우클릭으로 현재 파일 분석 |
+| `AutoERD: 폴더 내 엔티티 전체 분석` | 폴더 우클릭 → 하위 모든 `.java` / `.prisma` 파일 한 번에 분석 |
+| `AutoERD: DDL을 마이그레이션 파일로 저장` | AutoERD 앱의 SQL DDL을 마이그레이션 파일 경로에 저장하도록 안내 |
+
+### 설정
+
+VS Code 설정(`settings.json` 또는 **Settings UI → AutoERD**)에서 변경합니다.
+
+| 설정 키 | 기본값 | 설명 |
+|---------|--------|------|
+| `autoerd.serverUrl` | `http://localhost:3000` | AutoERD 프론트엔드 서버 URL |
+| `autoerd.migrationFormat` | `flyway` | DDL 저장 포맷 (`flyway` / `liquibase` / `plain`) |
+| `autoerd.migrationDir` | `src/main/resources/db/migration` | 마이그레이션 파일 저장 경로 (프로젝트 루트 기준) |
+
+### 동작 원리
+
+```
+탐색기 / 에디터 우클릭
+    │
+    ▼
+analyzeFile / analyzeFolder 커맨드
+    │  .java 파일 → jpaParser.ts   (JPA @Entity 파싱)
+    │  .prisma 파일 → prismaParser.ts (Prisma model 파싱)
+    │  폴더 선택 시 target/**, build/** 제외하고 재귀 수집
+    ▼
+결과 알림 메시지 (N개 엔티티, M개 관계)
+    ├── [브라우저에서 열기]
+    │       JSON → Buffer.from(payload).toString('base64url')
+    │       → vscode.env.openExternal("$serverUrl/projects/new#import=<encoded>")
+    │
+    └── [클립보드에 JSON 복사]
+            vscode.env.clipboard.writeText(payload)
+```
+
+`AutoERD: 열기` 커맨드는 별도 WebView 패널을 생성하고 AutoERD 앱을 iframe으로 내장합니다.
+서버 연결 전까지 "서버에 연결 중입니다..." 오버레이가 표시되며, 새로고침 버튼으로 재시도할 수 있습니다.
+
+### IntelliJ 플러그인과의 차이점
+
+| 항목 | IntelliJ 플러그인 | VS Code 익스텐션 |
+|------|-------------------|-----------------|
+| 내장 브라우저 | JCEF (IDE 내 탭) | WebView iframe |
+| 파서 구현 | Kotlin (단일 파서) | TypeScript (jpaParser / prismaParser 분리) |
+| 마이그레이션 저장 | 미지원 | `autoerd.saveDDL` 커맨드 지원 |
+| 설정 포맷 | IntelliJ Settings UI | VS Code settings.json |
+
+---
+
 ## Groq API 설정 (선택)
 
 Groq API 키 없이도 MockProvider로 동작합니다.
@@ -240,6 +307,10 @@ autoDBmodeliing/
 │   └── src/main/kotlin/com/autoerd/plugin/
 │       ├── parsers/        # JpaEntityParser (regex 기반)
 │       └── actions/        # AnalyzeEntityAction
+├── vscode-extension/       # VS Code 익스텐션 (TypeScript)
+│   └── src/
+│       ├── extension.ts    # 커맨드 등록 및 WebView
+│       └── parsers/        # jpaParser, prismaParser
 ├── docker/
 │   └── postgres-init.sql
 ├── docker-compose.yml
